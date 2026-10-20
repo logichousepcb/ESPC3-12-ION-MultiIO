@@ -4,8 +4,12 @@
 Pure Python, so it runs on Debian or on the Windows build PC alike:
 
     python3 build_deb.py            # writes dist/ion-multiio-tools_<ver>_all.deb
+    python3 build_deb.py --out-dir /tmp/x
+
+The path of the built package is printed on stdout.
 """
 
+import argparse
 import gzip
 import hashlib
 import io
@@ -96,7 +100,15 @@ def ar_member(name, data, mtime):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Build the ionctl .deb package.")
+    parser.add_argument("--out-dir", default=os.path.join(HERE, "dist"))
+    parser.add_argument("--print-version", action="store_true", help="print the version and exit")
+    opts = parser.parse_args()
+
     version = read_version()
+    if opts.print_version:
+        print(version)
+        return
     mtime = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))
     files = payload()
 
@@ -112,9 +124,8 @@ def main():
     deb += ar_member("control.tar.gz", make_tar(control, mtime), mtime)
     deb += ar_member("data.tar.gz", make_tar(files, mtime), mtime)
 
-    out_dir = os.path.join(HERE, "dist")
-    os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, "%s_%s_all.deb" % (PKG, version))
+    os.makedirs(opts.out_dir, exist_ok=True)
+    out = os.path.join(opts.out_dir,"%s_%s_all.deb" % (PKG, version))
     with open(out, "wb") as f:
         f.write(deb)
     print(out)

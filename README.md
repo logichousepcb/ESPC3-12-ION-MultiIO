@@ -147,7 +147,7 @@ commands are `hello`, `status`, `gpio`, `i2c`, `scan`, `power`, `gpio-mode`, `wi
 `forget` and `reboot`. USB commands don't ask for the admin password.
 
 The `host/` folder contains `ionctl`, a Debian command-line tool for this protocol. Run
-`python3 host/build_deb.py` to build its `.deb` package. See [host/README.md](host/README.md).
+`curl -fsSL https://raw.githubusercontent.com/logichousepcb/ESPC3-12-ION-MultiIO/main/install.sh | sh` to install it on a Debian server. See [host/README.md](host/README.md).
 
 ## Configuration
 

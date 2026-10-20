@@ -9,20 +9,43 @@ commands from it.
 
 ## Install
 
-Build the package (on any machine with Python 3):
+On any Debian or Ubuntu server, this one command installs the latest release:
 
 ```
-python3 build_deb.py          # -> dist/ion-multiio-tools_1.0.0_all.deb
+curl -fsSL https://raw.githubusercontent.com/logichousepcb/ESPC3-12-ION-MultiIO/main/install.sh | sh
 ```
 
-Copy the package to the server and install it:
+It does three things:
+
+- installs the package and its dependency, `python3-serial`
+- adds you to the `dialout` group so you can use the USB port; log out and back in afterwards
+- reinstalls cleanly, so running it again is also how you update
+
+To install from a clone instead, which builds the package from the checked-out source:
 
 ```
-sudo apt install ./ion-multiio-tools_1.0.0_all.deb    # pulls in python3-serial
-sudo usermod -aG dialout $USER                         # serial port access; log in again afterwards
+git clone https://github.com/logichousepcb/ESPC3-12-ION-MultiIO.git
+cd ESPC3-12-ION-MultiIO && ./install.sh        # update later: git pull && ./install.sh
 ```
+
+You can also download the `.deb` from the
+[releases page](https://github.com/logichousepcb/ESPC3-12-ION-MultiIO/releases) and install it with
+`sudo apt install ./ion-multiio-tools_<version>_all.deb`. `python3 build_deb.py` builds the same
+package on any machine with Python 3.
 
 `esptool` is a recommended dependency. Only `ionctl flash` uses it.
+
+### Releasing a new version
+
+1. Bump `__version__` in `ion_multiio/__init__.py`.
+2. Commit, then push a matching tag:
+
+   ```
+   git tag ionctl-v1.0.1 && git push origin ionctl-v1.0.1
+   ```
+
+A GitHub Actions workflow builds the `.deb` and publishes the release. The one-line installer then
+picks it up.
 
 To run without installing, use `python3 -m ion_multiio ...` from this folder. It needs `python3-serial`.
 
