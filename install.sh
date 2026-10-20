@@ -30,9 +30,13 @@ case "$0" in
     */install.sh | install.sh) SRC_DIR="$(cd "$(dirname "$0")" && pwd)" ;;
 esac
 
+# A stale package index makes apt request dependency versions the mirror
+# has already dropped (404), so always refresh it first.
+echo "Updating package lists..."
+$SUDO apt-get update -q
+
 if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/host/build_deb.py" ]; then
     if ! command -v python3 >/dev/null 2>&1; then
-        $SUDO apt-get update
         $SUDO apt-get install -y python3
     fi
     echo "Building package from $SRC_DIR..."
