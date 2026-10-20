@@ -39,7 +39,10 @@ def resolve_port(args):
     env = os.environ.get("IONCTL_PORT")
     if env:
         return env
-    found = find_devices()
+    busy = []
+    found = find_devices(busy=busy)
+    if not found and busy:
+        raise DeviceError("%s: another program has the port open" % ", ".join(busy))
     if not found:
         raise DeviceError("no ION Multi-IO board found on USB; use --port /dev/ttyUSB0 "
                           "(or set IONCTL_PORT)")

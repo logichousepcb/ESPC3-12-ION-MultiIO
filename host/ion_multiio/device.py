@@ -253,13 +253,19 @@ def stable_path(device):
     return None
 
 
-def find_devices(probe_timeout=2.0):
-    """Probe known USB-serial ports; return [(port, hello_reply)] that answer."""
+def find_devices(probe_timeout=2.0, busy=None):
+    """Probe known USB-serial ports; return [(port, hello_reply)] that answer.
+
+    Ports that another program holds open are skipped; pass a list as
+    `busy` to collect them.
+    """
     result = []
     for device, _info in candidate_ports():
         try:
             with Device(device, timeout=probe_timeout) as dev:
                 result.append((device, dev.wait_ready(total=probe_timeout, attempt=probe_timeout)))
-        except DeviceError:
+        except DeviceError as e:
+            if busy is not None and "another program has the port open" in str(e):
+                busy.append(device)
             continue
     return result
