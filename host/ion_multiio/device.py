@@ -63,7 +63,9 @@ class Device:
             self._ser = _serial
         else:
             try:
-                self._ser = serial.Serial(port, baud, timeout=0.05, exclusive=True)
+                # write_timeout: on the C3's native USB port, writes block for
+                # good if the firmware never reads (e.g. firmware < 1.11.0).
+                self._ser = serial.Serial(port, baud, timeout=0.05, write_timeout=2, exclusive=True)
             except (serial.SerialException, OSError) as e:
                 hint = ""
                 if "ermission denied" in str(e):
@@ -72,7 +74,7 @@ class Device:
                     hint = " (another program has the port open)"
                 raise DeviceError("cannot open %s: %s%s" % (port, e, hint)) from e
         # Terminate any half-typed line sitting in the device's input buffer.
-        self._ser.write(b"\n")
+        self._write(b"\n")
 
     # -- context manager ----------------------------------------------------
 
@@ -92,6 +94,17 @@ class Device:
     def _next_id(self):
         self._seq += 1
         return "%s-%d" % (self._tag, self._seq)
+
+    def _write(self, data):
+        try:
+            self._ser.write(data)
+        except serial.SerialTimeoutException as e:
+            self.close()
+            raise DeviceError("%s is not accepting input; the firmware is not reading this port "
+                              "(USB commands need firmware >= 1.11.0 on the native USB port)"
+                              % self.port) from e
+        except (serial.SerialException, OSError) as e:
+            raise DeviceError("write to %s failed: %s" % (self.port, e)) from e
 
     def _read_line(self, deadline):
         """Next complete line (without newline), or None at the deadline."""
@@ -123,17 +136,14 @@ class Device:
         line = "@%s %s%s\n" % (rid, command, " " + query if query else "")
         if len(line) > 500:
             raise DeviceError("command too long for the device (max ~500 bytes)")
-        try:
-            self._ser.write(line.encode("utf-8"))
-        except (serial.SerialException, OSError) as e:
-            raise DeviceError("write to %s failed: %s" % (self.port, e)) from e
+        self._write(line.encode("utf-8"))
 
         prefix = "@%s " % rid
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
         while True:
             text = self._read_line(deadline)
             if text is None:
-                raise DeviceError("no reply from %s to '%s' (is the firmware running and >= 1.10.0?)"
+                raise DeviceError("no reply from %s to '%s' (is the firmware running and >= 1.11.0?)"
                                   % (self.port, command))
             if text.startswith(prefix):
                 try:

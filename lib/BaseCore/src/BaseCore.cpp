@@ -69,6 +69,28 @@ float g_ina226CurrentMa = 0.0f;
 float g_ina226PowerMw = 0.0f;
 String g_ina226Error;
 
+// Log output goes to UART0 (Serial) and, when the build enables it, the
+// C3's native USB-Serial/JTAG port (USBSerial) as well.
+#if ARDUINO_USB_MODE && !ARDUINO_USB_CDC_ON_BOOT
+#define BASECORE_USB_SERIAL 1
+#else
+#define BASECORE_USB_SERIAL 0
+#endif
+
+class DualLog : public Print {
+ public:
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t* buf, size_t n) override {
+    Serial.write(buf, n);
+#if BASECORE_USB_SERIAL
+    USBSerial.write(buf, n);
+#endif
+    return n;
+  }
+};
+
+DualLog g_log;
+
 bool g_wifiDisabledByPin = false;
 bool g_wifiDisableRawState = false;
 bool g_wifiDisableStableState = false;
@@ -228,7 +250,7 @@ void initPowerSwitch() {
 
   pinMode(g_cfg.powerSwitchPin, OUTPUT);
   applyPowerSwitchOutput();
-  Serial.printf("[power] %s on GPIO%d initialized %s\n",
+  g_log.printf("[power] %s on GPIO%d initialized %s\n",
                 g_cfg.powerSwitchLabel ? g_cfg.powerSwitchLabel : "power switch",
                 g_cfg.powerSwitchPin, g_powerSwitchOn ? "on" : "off");
 }
@@ -287,13 +309,13 @@ void disableWifiByPin() {
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(false);
   WiFi.mode(WIFI_OFF);
-  Serial.printf("[wifi] disabled by GPIO%d\n", g_cfg.wifiDisablePin);
+  g_log.printf("[wifi] disabled by GPIO%d\n", g_cfg.wifiDisablePin);
 }
 
 void enableWifiAfterPin() {
   if (!g_wifiDisabledByPin) return;
   g_wifiDisabledByPin = false;
-  Serial.printf("[wifi] re-enabling after GPIO%d released\n", g_cfg.wifiDisablePin);
+  g_log.printf("[wifi] re-enabling after GPIO%d released\n", g_cfg.wifiDisablePin);
   if (!connectStation()) startPortal();
 }
 
@@ -542,19 +564,19 @@ void updateIna226Reading() {
 
 void logI2cScanResult() {
   if (!g_i2cReady) {
-    Serial.println("[i2c] scan unavailable");
+    g_log.println("[i2c] scan unavailable");
     return;
   }
   if (g_i2cDeviceCount == 0) {
-    Serial.println("[i2c] no devices found");
+    g_log.println("[i2c] no devices found");
     return;
   }
 
-  Serial.printf("[i2c] found %u device(s):", (unsigned)g_i2cDeviceCount);
+  g_log.printf("[i2c] found %u device(s):", (unsigned)g_i2cDeviceCount);
   for (size_t i = 0; i < g_i2cDeviceCount; i++) {
-    Serial.printf(" 0x%02X", g_i2cDevices[i]);
+    g_log.printf(" 0x%02X", g_i2cDevices[i]);
   }
-  Serial.println();
+  g_log.println();
 }
 
 void scanI2cBus(bool logResult) {
@@ -580,18 +602,18 @@ void initI2c() {
   if (!i2cConfigured()) return;
 
   if (!i2cPinsValid()) {
-    Serial.printf("[i2c] invalid pin config: SDA GPIO%d, SCL GPIO%d\n", g_cfg.i2cSdaPin, g_cfg.i2cSclPin);
+    g_log.printf("[i2c] invalid pin config: SDA GPIO%d, SCL GPIO%d\n", g_cfg.i2cSdaPin, g_cfg.i2cSclPin);
     return;
   }
 
   if (!Wire.begin(g_cfg.i2cSdaPin, g_cfg.i2cSclPin, g_cfg.i2cClockHz)) {
-    Serial.printf("[i2c] begin failed on SDA GPIO%d / SCL GPIO%d\n", g_cfg.i2cSdaPin, g_cfg.i2cSclPin);
+    g_log.printf("[i2c] begin failed on SDA GPIO%d / SCL GPIO%d\n", g_cfg.i2cSdaPin, g_cfg.i2cSclPin);
     return;
   }
   Wire.setClock(g_cfg.i2cClockHz);
 
   g_i2cReady = true;
-  Serial.printf("[i2c] initialized on SDA GPIO%d / SCL GPIO%d @ %lu Hz\n",
+  g_log.printf("[i2c] initialized on SDA GPIO%d / SCL GPIO%d @ %lu Hz\n",
                 g_cfg.i2cSdaPin, g_cfg.i2cSclPin, (unsigned long)g_cfg.i2cClockHz);
   scanI2cBus(true);
   for (size_t i = 0; i < 2; i++) {
@@ -608,11 +630,11 @@ void initI2c() {
       interruptSuffix += ")";
     }
     if (g_mcp23017[i].present) {
-      Serial.printf("[mcp23017] %s detected at 0x%02X%s\n",
+      g_log.printf("[mcp23017] %s detected at 0x%02X%s\n",
                     g_mcp23017[i].label ? g_mcp23017[i].label : "GPIO expander",
                     g_mcp23017[i].address, interruptSuffix.c_str());
     } else {
-      Serial.printf("[mcp23017] %s unavailable at 0x%02X%s: %s\n",
+      g_log.printf("[mcp23017] %s unavailable at 0x%02X%s: %s\n",
                     g_mcp23017[i].label ? g_mcp23017[i].label : "GPIO expander",
                     g_mcp23017[i].address, interruptSuffix.c_str(),
                     g_mcp23017[i].error.c_str());
@@ -622,10 +644,10 @@ void initI2c() {
   if (ina226Configured()) {
     if (detectIna226()) {
       updateIna226Reading();
-      Serial.printf("[ina226] detected at 0x%02X, bus %.3f V, current %.1f mA, power %.1f mW\n",
+      g_log.printf("[ina226] detected at 0x%02X, bus %.3f V, current %.1f mA, power %.1f mW\n",
                     g_cfg.ina226Address, g_ina226BusVoltageV, g_ina226CurrentMa, g_ina226PowerMw);
     } else {
-      Serial.printf("[ina226] monitor unavailable at 0x%02X: %s\n",
+      g_log.printf("[ina226] monitor unavailable at 0x%02X: %s\n",
                     g_cfg.ina226Address, g_ina226Error.c_str());
     }
   }
@@ -636,7 +658,7 @@ void initI2c() {
 bool connectStation() {
   if (g_ssid.isEmpty()) return false;
 
-  Serial.printf("[wifi] connecting to \"%s\"\n", g_ssid.c_str());
+  g_log.printf("[wifi] connecting to \"%s\"\n", g_ssid.c_str());
   WiFi.setHostname(g_host.c_str());  // must precede mode()/begin() on 2.x
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
@@ -647,19 +669,19 @@ bool connectStation() {
     delay(100);
   }
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[wifi] connection failed");
+    g_log.println("[wifi] connection failed");
     WiFi.disconnect(true);
     return false;
   }
 
-  Serial.printf("[wifi] connected, IP %s, http://%s.local/\n",
+  g_log.printf("[wifi] connected, IP %s, http://%s.local/\n",
                 WiFi.localIP().toString().c_str(), g_host.c_str());
   if (MDNS.begin(g_host.c_str())) MDNS.addService("http", "tcp", 80);
   return true;
 }
 
 void startPortal() {
-  Serial.printf("[portal] starting AP \"%s\" at %s\n", g_apSsid.c_str(),
+  g_log.printf("[portal] starting AP \"%s\" at %s\n", g_apSsid.c_str(),
                 AP_IP.toString().c_str());
   WiFi.setHostname(g_host.c_str());
   WiFi.mode(WIFI_AP_STA);  // STA side is needed for scanning and retries
@@ -683,7 +705,7 @@ void portalRetryTick() {
 
   if (g_retrying) {
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("[portal] saved network is back, restarting into station mode");
+      g_log.println("[portal] saved network is back, restarting into station mode");
       BaseCore::scheduleRestart(500);
       g_retrying = false;
     } else if (elapsed(g_lastRetry, g_cfg.staConnectTimeoutMs)) {
@@ -695,7 +717,7 @@ void portalRetryTick() {
   }
 
   if (elapsed(g_lastRetry, g_cfg.staRetryIntervalMs) && WiFi.softAPgetStationNum() == 0) {
-    Serial.println("[portal] retrying saved network");
+    g_log.println("[portal] retrying saved network");
     WiFi.begin(g_ssid.c_str(), g_pass.c_str());
     g_retrying = true;
     g_lastRetry = millis();
@@ -711,9 +733,9 @@ void stationWatchTick() {
   }
   if (g_linkLostAt == 0) {
     g_linkLostAt = millis() | 1;
-    Serial.println("[wifi] link lost, auto-reconnecting");
+    g_log.println("[wifi] link lost, auto-reconnecting");
   } else if (elapsed(g_linkLostAt, g_cfg.staRetryIntervalMs)) {
-    Serial.println("[wifi] link down too long, falling back to setup portal");
+    g_log.println("[wifi] link down too long, falling back to setup portal");
     g_linkLostAt = 0;
     MDNS.end();
     startPortal();
@@ -726,7 +748,7 @@ void resetButtonTick() {
     if (g_btnDownAt == 0) {
       g_btnDownAt = millis() | 1;
     } else if (elapsed(g_btnDownAt, g_cfg.resetHoldMs)) {
-      Serial.println("[reset] button held, erasing WiFi credentials");
+      g_log.println("[reset] button held, erasing WiFi credentials");
       forgetWifi();
       ESP.restart();
     }
@@ -1095,7 +1117,7 @@ void handleUpdateUpload() {
       g_updateError = "Unauthorized";
       return;
     }
-    Serial.printf("[ota] receiving %s\n", up.filename.c_str());
+    g_log.printf("[ota] receiving %s\n", up.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) g_updateError = Update.errorString();
     return;
   }
@@ -1132,7 +1154,7 @@ void handleUpdateUpload() {
     if (!Update.end(true)) {
       g_updateError = Update.errorString();
     } else {
-      Serial.printf("[ota] success, %u bytes\n", (unsigned)up.totalSize);
+      g_log.printf("[ota] success, %u bytes\n", (unsigned)up.totalSize);
     }
   } else if (up.status == UPLOAD_FILE_ABORTED) {
     if (Update.isRunning()) Update.abort();
@@ -1152,7 +1174,7 @@ void handleUpdateDone() {
     return;
   }
   if (!g_updateError.isEmpty()) {
-    Serial.printf("[ota] failed: %s\n", g_updateError.c_str());
+    g_log.printf("[ota] failed: %s\n", g_updateError.c_str());
     return sendResult(false, "Update failed: " + g_updateError);
   }
   sendResult(true, "Update successful. Restarting into the new firmware.", true);
@@ -1177,8 +1199,19 @@ void handleNotFound() {
 const size_t SERIAL_LINE_MAX = 512;
 const int SERIAL_PROTOCOL_VERSION = 1;
 
-String g_serialLine;
-bool g_serialOverflow = false;
+// One input line buffer per port; replies go back to the port that asked.
+struct SerialPort {
+  Stream* stream;
+  String line;
+  bool overflow;
+};
+
+SerialPort g_serialPorts[] = {
+    {&Serial, String(), false},
+#if BASECORE_USB_SERIAL
+    {&USBSerial, String(), false},
+#endif
+};
 
 int hexNibble(char c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -1271,7 +1304,7 @@ bool validSerialId(const String& id) {
   return true;
 }
 
-void handleSerialLine(String line, bool overflow) {
+void handleSerialLine(Stream& out, String line, bool overflow) {
   line.trim();
   if (line.length() < 2 || line[0] != '@') return;  // not addressed to us
 
@@ -1291,22 +1324,24 @@ void handleSerialLine(String line, bool overflow) {
     query.trim();
     reply = cmd.isEmpty() ? resultJson(errResult("Missing command.")) : runSerialCommand(cmd, SerialArgs(query));
   }
-  Serial.print("@" + id + " " + reply + "\n");
+  out.print("@" + id + " " + reply + "\n");
 }
 
 void serialTick() {
-  int budget = 256;  // bound the time spent here per loop()
-  while (budget-- > 0 && Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == '\r') continue;
-    if (c == '\n') {
-      handleSerialLine(g_serialLine, g_serialOverflow);
-      g_serialLine = "";
-      g_serialOverflow = false;
-    } else if (g_serialLine.length() < SERIAL_LINE_MAX) {
-      g_serialLine += c;
-    } else {
-      g_serialOverflow = true;  // keep the head so the id can still be echoed
+  for (SerialPort& port : g_serialPorts) {
+    int budget = 256;  // bound the time spent here per loop()
+    while (budget-- > 0 && port.stream->available() > 0) {
+      char c = (char)port.stream->read();
+      if (c == '\r') continue;
+      if (c == '\n') {
+        handleSerialLine(*port.stream, port.line, port.overflow);
+        port.line = "";
+        port.overflow = false;
+      } else if (port.line.length() < SERIAL_LINE_MAX) {
+        port.line += c;
+      } else {
+        port.overflow = true;  // keep the head so the id can still be echoed
+      }
     }
   }
 }
@@ -1337,6 +1372,14 @@ namespace BaseCore {
 
 void begin(const BaseConfig& cfg) {
   g_cfg = cfg;
+#if BASECORE_USB_SERIAL
+  // Big enough for a full status reply. Writes drop rather than block while
+  // no host has the port open.
+  USBSerial.setRxBufferSize(1024);
+  USBSerial.setTxBufferSize(4096);
+  USBSerial.begin();
+#endif
+  for (SerialPort& port : g_serialPorts) port.line.reserve(SERIAL_LINE_MAX);
   initMcp23017States();
   if (g_cfg.resetButtonPin >= 0) pinMode(g_cfg.resetButtonPin, INPUT_PULLUP);
   if (wifiDisableConfigured()) {
@@ -1353,7 +1396,7 @@ void begin(const BaseConfig& cfg) {
 
   loadSettings();
   loadMcp23017Mode();
-  Serial.printf("\n%s v%s (%s)\n", g_cfg.title, g_cfg.fwVersion, g_host.c_str());
+  g_log.printf("\n%s v%s (%s)\n", g_cfg.title, g_cfg.fwVersion, g_host.c_str());
   initI2c();
   if (mcp23017InterruptConfigured(g_mcp23017[0])) {
     attachInterrupt(digitalPinToInterrupt(g_mcp23017[0].interruptPin), onMcp23017Interrupt0, FALLING);
@@ -1369,7 +1412,6 @@ void begin(const BaseConfig& cfg) {
 
   registerRoutes();
   g_server.begin();
-  g_serialLine.reserve(SERIAL_LINE_MAX);
 }
 
 void loop() {
@@ -1388,7 +1430,7 @@ void loop() {
   resetButtonTick();
 
   if (g_restartPending && (int32_t)(millis() - g_restartAt) >= 0) {
-    Serial.println("[sys] restarting");
+    g_log.println("[sys] restarting");
     delay(100);
     ESP.restart();
   }

@@ -4,8 +4,12 @@
 board through its USB-serial port. It needs no WiFi or network access. It works even while WiFi is
 turned off by the GPIO3 disable input.
 
-It requires firmware **1.10.0 or newer**. Older firmware only writes logs to USB and doesn't read
-commands from it.
+It requires firmware **1.11.0 or newer**. The firmware answers on two serial ports:
+
+- the ESP32-C3's native USB port, which shows up on the server as `/dev/ttyACM*`
+- UART0 on GPIO20/21, through a USB-serial adapter, which shows up as `/dev/ttyUSB*`
+
+Firmware 1.10.x answers only on UART0. Older firmware doesn't answer on either.
 
 ## Install
 

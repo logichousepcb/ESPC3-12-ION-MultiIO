@@ -141,8 +141,9 @@ When an admin password is set, every endpoint requires Basic auth (user `admin`)
 
 ## USB control
 
-From firmware 1.10.0 the same functions are also available over the USB-serial port (115200 baud),
-without WiFi. Send `@<id> <command> [form-encoded args]` and the device replies `@<id> <json>`. The
+From firmware 1.11.0 the same functions are also available over serial, without WiFi. The firmware
+listens on the ESP32-C3's native USB port and on UART0 (GPIO20/21, 115200 baud), sends its log
+output to both, and answers each command on the port it arrived on. Send `@<id> <command> [form-encoded args]` and the device replies `@<id> <json>`. The
 commands are `hello`, `status`, `gpio`, `i2c`, `scan`, `power`, `gpio-mode`, `wifi`, `device`,
 `forget` and `reboot`. USB commands don't ask for the admin password.
 
