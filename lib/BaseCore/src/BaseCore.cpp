@@ -1325,6 +1325,12 @@ void handleSerialLine(Stream& out, String line, bool overflow) {
     reply = cmd.isEmpty() ? resultJson(errResult("Missing command.")) : runSerialCommand(cmd, SerialArgs(query));
   }
   out.print("@" + id + " " + reply + "\n");
+#if BASECORE_USB_SERIAL
+  // The core's HWCDC driver can leave queued TX data unsent until the next
+  // write (its IN_EMPTY interrupt gets disabled while data is still pending).
+  // flush() re-arms it until the ring buffer drains, so the reply goes out now.
+  if (&out == &USBSerial) USBSerial.flush();
+#endif
 }
 
 void serialTick() {
