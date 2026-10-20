@@ -76,7 +76,8 @@ ionctl admin-password set|clear   # web UI admin password
 ionctl reboot [--wait-boot]
 ionctl log -T                     # stream the device's log output
 ionctl raw status                 # any protocol command, raw JSON reply
-ionctl flash firmware-merged.bin  # reflash via esptool, then confirm it boots
+ionctl flash firmware-merged.bin  # reflash over USB (no WiFi needed), keeps saved settings
+ionctl flash --erase firmware-merged.bin   # wipe the whole chip first, settings included
 ```
 
 ### Choosing the port
@@ -113,6 +114,12 @@ with Device("/dev/ttyUSB0") as dev:
 
 - **No admin password over USB.** USB commands don't ask for the web admin password. Anyone with
   physical access to the USB port can reflash the chip anyway.
+- **Flashing over USB.** `ionctl flash` writes `firmware-merged.bin` with esptool. The merged image
+  is one continuous file whose padding covers the settings (NVS) partition, so `ionctl` reads the
+  image's partition table and skips that range. WiFi credentials, hostname, admin password, PoE
+  state and GPIO mode survive a reflash. It holds the port lock for the whole flash, so the Base
+  Station page and other `ionctl` runs wait instead of interfering. Afterwards it waits for the
+  board to boot and prints the running version.
 - **Commands at boot.** The firmware doesn't read commands while it is joining WiFi at boot (up to
   about 20 s). `ionctl` keeps retrying for `--wait` seconds (default 25).
 - **Opening the port.** `ionctl` opens the port with DTR and RTS both asserted. With the standard

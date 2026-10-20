@@ -5,8 +5,10 @@ import getpass
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 from . import __version__
@@ -353,13 +355,80 @@ def find_esptool():
         return None
 
 
+PART_TABLE_OFFSET = 0x8000
+PART_TYPE_DATA = 0x01
+PART_SUBTYPES_SETTINGS = (0x02, 0x04)  # nvs, nvs_keys
+
+
+def settings_ranges(image):
+    """(start, end) flash ranges of the NVS partitions named in the image's partition table."""
+    ranges = []
+    for off in range(PART_TABLE_OFFSET, PART_TABLE_OFFSET + 0xC00, 32):
+        entry = image[off:off + 32]
+        if entry[:2] != b"\xaa\x50":
+            break
+        ptype, subtype = entry[2], entry[3]
+        start, size = struct.unpack("<II", entry[4:12])
+        if ptype == PART_TYPE_DATA and subtype in PART_SUBTYPES_SETTINGS:
+            ranges.append((start, start + size))
+    return ranges
+
+
+def image_segments(image, skip):
+    """Split the image into (offset, bytes) pieces that leave out the `skip` ranges."""
+    segments, pos = [], 0
+    for start, end in sorted(skip):
+        if start >= len(image):
+            break
+        if start > pos:
+            segments.append((pos, image[pos:start]))
+        pos = max(pos, end)
+    if pos < len(image):
+        segments.append((pos, image[pos:]))
+    return segments
+
+
+def lock_port(port, wait=15.0):
+    """Hold the same lock ionctl uses so nothing else talks to the port meanwhile.
+
+    esptool itself does not take it, so without this the Base Station page
+    (or another ionctl) could open the port in the middle of a flash.
+    """
+    import fcntl  # POSIX only; imported here so the module still loads elsewhere
+
+    fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise DeviceError("%s: another program has the port open" % port)
+            time.sleep(0.1)
+
+
+def wait_for_board(port, timeout, total=40.0):
+    """After a reset the USB port disappears for a moment; wait until the firmware answers."""
+    deadline = time.monotonic() + total
+    while True:
+        try:
+            with Device(port, timeout=timeout) as dev:
+                return dev.wait_ready(total=min(5.0, max(0.5, deadline - time.monotonic())))
+        except DeviceError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
 def cmd_flash(args):
     with open(args.image, "rb") as f:
-        head = f.read(0x8002)
+        image = f.read()
     # A merged image has the bootloader at 0x0 and the partition table
     # (magic AA 50) at 0x8000. A plain application .bin would brick the
     # boot chain if written to 0x0, so refuse it.
-    if len(head) < 0x8002 or head[0] != 0xE9 or head[0x8000:0x8002] != b"\xaa\x50":
+    if len(image) < 0x10000 or image[0] != 0xE9 or image[PART_TABLE_OFFSET:PART_TABLE_OFFSET + 2] != b"\xaa\x50":
         print("%s is not a merged image. Flash .pio/build/esp32c3/firmware-merged.bin, "
               "or upload firmware.bin through the web page." % args.image, file=sys.stderr)
         return EXIT_USAGE
@@ -367,18 +436,40 @@ def cmd_flash(args):
     if not esptool:
         print("esptool not found; install it with: sudo apt install esptool", file=sys.stderr)
         return EXIT_FAILED
+
+    # The merged image pads the gap after the partition table with 0xFF,
+    # which covers the NVS partition. Writing it whole would wipe WiFi
+    # credentials, hostname, admin password and the saved power state, so
+    # leave NVS out unless a full erase was asked for.
+    skip = [] if args.erase else settings_ranges(image)
+    segments = image_segments(image, skip)
+
     port = resolve_port(args)
-    cmd = esptool + ["--chip", "esp32c3", "--port", port, "--baud", str(args.baud),
-                     "write_flash", "0x0", args.image]
-    if args.erase:
-        cmd.insert(-2, "--erase-all")
-    print("+ " + " ".join(cmd), file=sys.stderr)
-    rc = subprocess.call(cmd)
+    port_real = os.path.realpath(port)
+    with tempfile.TemporaryDirectory(prefix="ionctl-flash-") as tmp:
+        cmd = esptool + ["--chip", "esp32c3", "--port", port_real, "--baud", str(args.baud), "write_flash"]
+        if args.erase:
+            cmd.append("--erase-all")
+        for offset, data in segments:
+            path = os.path.join(tmp, "0x%06x.bin" % offset)
+            with open(path, "wb") as f:
+                f.write(data)
+            cmd += ["0x%x" % offset, path]
+        for start, end in skip:
+            print("Keeping settings: not writing 0x%x-0x%x (NVS)" % (start, end), file=sys.stderr)
+        print("+ " + " ".join(cmd), file=sys.stderr)
+
+        lock_fd = lock_port(port_real)
+        try:
+            rc = subprocess.call(cmd)
+        finally:
+            os.close(lock_fd)
     if rc != 0:
         return EXIT_FAILED
-    with Device(port, timeout=args.timeout) as dev:
-        info = dev.wait_ready(total=30)
-        print("Running: %s v%s (%s)" % (info["title"], info["version"], info["hostname"]))
+
+    print("Waiting for the board to boot...", file=sys.stderr)
+    info = wait_for_board(port, args.timeout)
+    print("Running: %s v%s (%s)" % (info["title"], info["version"], info["hostname"]))
     return EXIT_OK
 
 
