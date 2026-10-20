@@ -7,6 +7,9 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <esp_ota_ops.h>
+#if ARDUINO_USB_MODE
+#include <hal/usb_serial_jtag_ll.h>
+#endif
 
 #include "BasePage.h"
 
@@ -90,6 +93,10 @@ class DualLog : public Print {
 };
 
 DualLog g_log;
+
+#if BASECORE_USB_SERIAL
+const size_t USB_TX_BUFFER_SIZE = 4096;
+#endif
 
 bool g_wifiDisabledByPin = false;
 bool g_wifiDisableRawState = false;
@@ -1295,6 +1302,41 @@ String runSerialCommand(const String& cmd, const SerialArgs& args) {
   return resultJson(errResult("Unknown command '" + cmd + "'."));
 }
 
+#if BASECORE_USB_SERIAL
+// Push queued USB data all the way out now. The core's HWCDC driver can
+// leave the end of a reply unsent until something else is written:
+//  - it can disable its TX-empty interrupt while data is still queued in its
+//    ring buffer, so we keep re-arming the interrupt until the queue drains;
+//  - it marks each chunk ready with a single "write done" (wr_done), which the
+//    hardware ignores while the previous packet is still being sent, so the
+//    last chunk can sit in the 64-byte FIFO. Repeating wr_done a few times
+//    afterwards sends it (or, if the FIFO is already empty, a harmless
+//    zero-length packet).
+// Also, HWCDC::flush() discards the queue whenever the driver's "host
+// connected" guess is false, so it is not used here. Gives up if the host
+// stops reading.
+void usbSerialDrain(uint32_t stallMs = 200) {
+  int free = USBSerial.availableForWrite();
+  uint32_t progressAt = millis();
+  while (free < (int)USB_TX_BUFFER_SIZE) {
+    usb_serial_jtag_ll_txfifo_flush();
+    usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+    delay(1);
+    int now = USBSerial.availableForWrite();
+    if (now != free) {
+      free = now;
+      progressAt = millis();
+    } else if (elapsed(progressAt, stallMs)) {
+      return;
+    }
+  }
+  for (int i = 0; i < 5; i++) {
+    delay(1);
+    usb_serial_jtag_ll_txfifo_flush();
+  }
+}
+#endif
+
 bool validSerialId(const String& id) {
   if (id.isEmpty() || id.length() > 16) return false;
   for (size_t i = 0; i < id.length(); i++) {
@@ -1324,13 +1366,14 @@ void handleSerialLine(Stream& out, String line, bool overflow) {
     query.trim();
     reply = cmd.isEmpty() ? resultJson(errResult("Missing command.")) : runSerialCommand(cmd, SerialArgs(query));
   }
-  out.print("@" + id + " " + reply + "\n");
 #if BASECORE_USB_SERIAL
-  // The core's HWCDC driver can leave queued TX data unsent until the next
-  // write (its IN_EMPTY interrupt gets disabled while data is still pending).
-  // flush() re-arms it until the ring buffer drains, so the reply goes out now.
-  if (&out == &USBSerial) USBSerial.flush();
+  if (&out == &USBSerial) {
+    out.print("@" + id + " " + reply + "\n");
+    usbSerialDrain();
+    return;
+  }
 #endif
+  out.print("@" + id + " " + reply + "\n");
 }
 
 void serialTick() {
@@ -1382,7 +1425,7 @@ void begin(const BaseConfig& cfg) {
   // Big enough for a full status reply. Writes drop rather than block while
   // no host has the port open.
   USBSerial.setRxBufferSize(1024);
-  USBSerial.setTxBufferSize(4096);
+  USBSerial.setTxBufferSize(USB_TX_BUFFER_SIZE);
   USBSerial.begin();
 #endif
   for (SerialPort& port : g_serialPorts) port.line.reserve(SERIAL_LINE_MAX);

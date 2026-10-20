@@ -14,7 +14,7 @@ void setup() {
 
   BaseConfig cfg;
   cfg.title = "ION Multi-IO add-on";
-  cfg.fwVersion = "1.11.2";
+  cfg.fwVersion = "1.11.5";
   cfg.i2cSdaPin = 4;
   cfg.i2cSclPin = 5;
   cfg.i2cClockHz = 400000;
